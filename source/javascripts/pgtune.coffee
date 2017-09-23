@@ -28,7 +28,7 @@ class Pgtune
     try
       $(document).foundation()
     catch e
-      console.warn "Too old browser :(" if console.warn?
+      console.warn "Too old browser with error: #{e}" if console.warn?
 
   # on submit
   _generateConfigForm: (event) =>
@@ -42,6 +42,7 @@ class Pgtune
 
   # generate config
   _generateConfig: =>
+    @dbVersion = parseFloat($('#pgtDbVersionValue').val())
     @osType = $('#pgtOsTypeValue').val()
     @osType = 'linux' if jQuery.inArray(@osType, ['linux', 'windows']) is -1
 
@@ -77,6 +78,17 @@ class Pgtune
 
     # messages in config
     infoMsg = ""
+
+    # setting message
+    settingsInfo = [
+      ["DB Version", @dbVersion],
+      ["OS Type", @osType],
+      ["DB Type", @dbType],
+      ["Total Memory (RAM)", "#{$('#pgtTotalMemValue').val()} #{$('#pgtTotalMemMeasValue').val()}"],
+      ["Number of Connections", gConfig['max_connections']]
+    ]
+
+    settingsInfo = settingsInfo.map((setting) => "# #{setting[0]}: #{setting[1]}")
 
     # this tool not being optimal for low memory systems
     if @totalMemory >= (256 * @constSize['MB'])
@@ -125,17 +137,35 @@ class Pgtune
       if gConfig['maintenance_work_mem'] > (2 * @constSize['GB'] / @constSize['KB'])
         gConfig['maintenance_work_mem'] = Math.floor(2 * @constSize['GB'] / @constSize['KB'])
 
+      if @totalMemory >= (100 * @constSize['GB']) # such setting can be even bad for very high memory systems, need show warnings
+        infoMsg = "# WARNING\n# this tool not being optimal \n# for very high memory systems\n"
     else
       infoMsg = "# WARNING\n# this tool not being optimal \n# for low memory systems\n"
 
-    # checkpoint_segments
-    gConfig['checkpoint_segments'] = {
-      web: 32,
-      oltp: 64,
-      dw: 128,
-      desktop: 3,
-      mixed: 32
-    }[@dbType]
+    if @dbVersion < 9.5
+      # checkpoint_segments
+      gConfig['checkpoint_segments'] = {
+        web: 32,
+        oltp: 64,
+        dw: 128,
+        desktop: 3,
+        mixed: 32
+      }[@dbType]
+    else
+      gConfig['min_wal_size'] = {
+        web: (1024 * @constSize['MB'] / @constSize['KB']),
+        oltp: (2048 * @constSize['MB'] / @constSize['KB']),
+        dw: (4096 * @constSize['MB'] / @constSize['KB']),
+        desktop: (100 * @constSize['MB'] / @constSize['KB']),
+        mixed: (1024 * @constSize['MB'] / @constSize['KB'])
+      }[@dbType]
+      gConfig['max_wal_size'] = {
+        web: (2048 * @constSize['MB'] / @constSize['KB']),
+        oltp: (4096 * @constSize['MB'] / @constSize['KB']),
+        dw: (8192 * @constSize['MB'] / @constSize['KB']),
+        desktop: (100 * @constSize['MB'] / @constSize['KB']),
+        mixed: (2048 * @constSize['MB'] / @constSize['KB'])
+      }[@dbType]
     # checkpoint_completion_target
     gConfig['checkpoint_completion_target'] = {
       web: 0.7,
@@ -166,12 +196,14 @@ class Pgtune
     }[@dbType]
 
     arrayConfig = ("#{key} = #{@_formatedValue(key, value)}" for key, value of gConfig)
-    @codeOut.text("#{infoMsg}#{arrayConfig.join("\n")}")
+    @codeOut.text("#{infoMsg}#{settingsInfo.join("\n")}\n\n#{arrayConfig.join("\n")}")
 
   # postgresql kernel
   _kernelSettings: =>
-    if 'windows' is @osType
-      $('#oldPostgresBlock').hide()
+    kernelBlockEl = $('#oldPostgresBlock')
+
+    if 'windows' is @osType or @dbVersion > 9.3
+      kernelBlockEl.hide()
     else
       shmall = Math.floor(@totalMemory / 8192)
       gConfig = """
@@ -179,7 +211,9 @@ class Pgtune
   kernel.shmall=#{shmall}
   """
       @oldPgkernel.text(gConfig)
-      $('#oldPostgresBlock').show()
+
+      kernelBlockEl.find('.pg_version').text(@dbVersion)
+      kernelBlockEl.show()
 
   # highlight code
   _hightlightCode: =>
@@ -208,7 +242,7 @@ class Pgtune
   _notSizeValues: =>
     ['max_connections', 'checkpoint_segments',
     'checkpoint_completion_target', 'default_statistics_target',
-    'synchronous_commit', 'random_page_cost', 'seq_page_cost']
+    'random_page_cost', 'seq_page_cost']
 
   # appcache
   _initAppcache: =>
